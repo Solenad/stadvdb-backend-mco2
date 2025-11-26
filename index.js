@@ -1,4 +1,5 @@
 import express, { urlencoded, json } from "express";
+import usersRouter from "./routes/users.routes.js";
 import { initPools, closePools } from "./config/connect.js";
 import "dotenv/config";
 
@@ -12,6 +13,8 @@ const startServer = async () => {
 
     app.use(json());
     app.use(urlencoded({ extended: true }));
+
+    app.use("/users", usersRouter);
 
     app.get("/", (req, res) => {
       res.status(200).json({

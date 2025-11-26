@@ -10,8 +10,7 @@ export async function getUsers(req, res) {
   }
 }
 
-// GET /users/:id
-export const getUser = async (req, res) => {
+export const getUserById = async (req, res) => {
   try {
     const id = req.params.id;
     const user = await UsersService.getUserById(id);
@@ -22,7 +21,6 @@ export const getUser = async (req, res) => {
   }
 };
 
-// GET /users/year/:year
 export const getUsersByYear = async (req, res) => {
   try {
     const year = parseInt(req.params.year);
