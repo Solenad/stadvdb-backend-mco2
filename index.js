@@ -1,11 +1,12 @@
 import express, { urlencoded, json } from "express";
+import { initPools, closePools } from "./config/connect.js";
 import "dotenv/config";
 
 const app = express();
 
 const startServer = async () => {
   try {
-    // await initDB();
+    await initPools();
 
     console.log("Databases initialized.");
 
@@ -29,7 +30,7 @@ const startServer = async () => {
       server.close();
 
       try {
-        // await closeDB();
+        await closePools();
 
         console.log("All connections closed.");
         process.exit(0);
