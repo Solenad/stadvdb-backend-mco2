@@ -1,5 +1,5 @@
 import mysql from "mysql2/promise";
-import { setTimeout as sleep } from "timers/promise";
+import { setTimeout as sleep } from "timers/promises";
 import "dotenv/config";
 
 let node1 = null;
@@ -8,12 +8,13 @@ let node3 = null;
 
 const MAX_RETRIES = 5;
 
-const createPool = (host) => {
+const createPool = (port) => {
   mysql.createPool({
-    host,
+    host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
+    port,
     waitForConnections: true,
     connectionLimit: 10,
   });
@@ -54,9 +55,9 @@ export const initPools = async () => {
 
   console.log("Initializing Nodes 1, 2, and 3...");
 
-  node1 = createPool(process.env.NODE1_HOST);
-  node2 = createPool(process.env.NODE2_HOST);
-  node3 = createPool(process.env.NODE3_HOST);
+  node1 = createPool(process.env.NODE1_PORT);
+  node2 = createPool(process.env.NODE2_PORT);
+  node3 = createPool(process.env.NODE3_PORT);
 
   await Promise.all([
     connectWithRetry(node1, "Node 1 (Full Replica)"),
