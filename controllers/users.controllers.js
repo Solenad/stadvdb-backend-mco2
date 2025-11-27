@@ -16,8 +16,8 @@ export const getUserById = async (req, res) => {
     const user = await UsersService.getUserById(id);
     if (!user) return res.status(404).json({ error: "User not found" });
     res.status(200).json(user);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };
 
@@ -26,7 +26,26 @@ export const getUsersByYear = async (req, res) => {
     const year = parseInt(req.params.year);
     const users = await UsersService.getAllUsersByDate(year);
     res.status(200).json(users);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const updateUserById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const result = await UsersService.updateUserById();
+
+    if (result.affectedRows === 0) {
+      res.status(404).json({ message: `No user found with id: ${id}` });
+    } else {
+      res
+        .status(200)
+        .json({ success: true, affected_rows: result.affectedRows });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };

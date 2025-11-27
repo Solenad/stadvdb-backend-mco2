@@ -5,6 +5,7 @@ const router = Router();
 
 router.get("/year/:year", UsersController.getUsersByYear);
 router.get("/:id", UsersController.getUserById);
+router.put("/:id", UsersController.updateUserById);
 router.get("/", UsersController.getUsers);
 
 export default router;

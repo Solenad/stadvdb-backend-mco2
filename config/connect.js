@@ -9,7 +9,7 @@ let node3 = null;
 const MAX_RETRIES = 5;
 
 const createPool = (port) => {
-  mysql.createPool({
+  const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
@@ -18,6 +18,8 @@ const createPool = (port) => {
     waitForConnections: true,
     connectionLimit: 10,
   });
+
+  return pool;
 };
 
 async function connectWithRetry(pool, label) {
@@ -60,9 +62,9 @@ export const initPools = async () => {
   node3 = createPool(process.env.NODE3_PORT);
 
   await Promise.all([
-    connectWithRetry(node1, "Node 1 (Full Replica)"),
-    connectWithRetry(node2, "Node 2 (2007 Fragment)"),
-    connectWithRetry(node3, "Node 3 (2006 Fragment)"),
+    connectWithRetry(node1, "Node 1 (2006 Fragment)"),
+    connectWithRetry(node2, "Node 2 (Full Replica)"),
+    connectWithRetry(node3, "Node 3 (2007 Fragment)"),
   ]);
 
   console.log("Connected to all nodes successfully.");
