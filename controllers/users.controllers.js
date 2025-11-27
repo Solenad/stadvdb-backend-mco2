@@ -1,5 +1,17 @@
 import * as UsersService from "../services/users.services.js";
 
+export async function createUser(req, res) {
+  try {
+    const data = req.body;
+
+    const created_user = await UsersService.createUser(data);
+
+    res.status(201).json(created_user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 export async function getUsers(req, res) {
   try {
     const users = await UsersService.getAllUsers();

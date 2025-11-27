@@ -1,5 +1,68 @@
 import { initPools } from "../config/connect.js";
 
+export const createUser = async (data) => {
+  const pools = await initPools();
+  const node1 = pools.node1;
+  const node2 = pools.node2;
+  const node3 = pools.node3;
+
+  const connPrimary = await node2.getConnection();
+  let connFragment = null;
+
+  try {
+    if (!data.dateOfBirth) {
+      throw new Error("dateOfBirth is required (must be 2006 or 2007).");
+    }
+
+    const year = new Date(data.dateOfBirth).getFullYear();
+    if (year !== 2006 && year !== 2007) {
+      throw new Error("Only DOB years 2006 or 2007 are allowed.");
+    }
+
+    const columns = Object.keys(data);
+    const placeholders = columns.map(() => "?").join(", ");
+    const values = Object.values(data);
+
+    const insertSQL = `
+      INSERT INTO Users (${columns.join(", ")})
+      VALUES (${placeholders})
+    `;
+
+    await connPrimary.beginTransaction();
+
+    const [result] = await connPrimary.execute(insertSQL, values);
+    const insertedId = result.insertId;
+
+    connFragment =
+      year === 2006 ? await node1.getConnection() : await node3.getConnection();
+
+    await connFragment.beginTransaction();
+
+    await connFragment.execute(insertSQL, values);
+
+    await connPrimary.commit();
+    await connFragment.commit();
+
+    connPrimary.release();
+    connFragment.release();
+
+    return { success: true, id: insertedId };
+  } catch (err) {
+    console.error("Insert failed. Rolling back...", err);
+
+    try {
+      await connPrimary.rollback();
+    } catch {}
+    try {
+      if (connFragment) await connFragment.rollback();
+    } catch {}
+
+    connPrimary.release();
+    if (connFragment) connFragment.release?.();
+    throw err;
+  }
+};
+
 export const getAllUsers = async () => {
   const pools = await initPools();
   const node1 = pools.node1;
@@ -39,13 +102,26 @@ export const updateUserById = async (id, data) => {
   const connPrimary = await node2.getConnection();
 
   const [[user]] = await connPrimary.execute(
-    `SELECT id, YEAR(createdAt) AS year FROM Users WHERE id = ?`,
+    `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ?`,
     [id],
   );
 
   if (!user) {
     connPrimary.release();
     return null;
+  }
+
+  if (user.year !== 2006 && user.year !== 2007) {
+    connPrimary.release();
+    throw new Error("Only users with DOB 2006 or 2007 can be updated.");
+  }
+
+  if (data.dateOfBirth) {
+    const newYear = new Date(data.dateOfBirth).getFullYear();
+    if (newYear !== 2006 && newYear !== 2007) {
+      connPrimary.release();
+      throw new Error("DOB must remain 2006 or 2007.");
+    }
   }
 
   const connFragment =
@@ -64,6 +140,7 @@ export const updateUserById = async (id, data) => {
       "zipCode",
       "phoneNumber",
       "gender",
+      "dateOfBirth",
     ];
 
     const setParts = [];
@@ -88,7 +165,6 @@ export const updateUserById = async (id, data) => {
     await connFragment.beginTransaction();
 
     await connPrimary.execute(updateSQL, values);
-
     await connFragment.execute(updateSQL, values);
 
     await connPrimary.commit();
@@ -104,14 +180,12 @@ export const updateUserById = async (id, data) => {
     try {
       await connPrimary.rollback();
     } catch {}
-
     try {
       await connFragment.rollback();
     } catch {}
 
     connPrimary.release();
     if (connFragment) connFragment.release();
-
     throw err;
   }
 };

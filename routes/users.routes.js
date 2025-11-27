@@ -7,5 +7,6 @@ router.get("/year/:year", UsersController.getUsersByYear);
 router.get("/:id", UsersController.getUserById);
 router.put("/:id", UsersController.updateUserById);
 router.get("/", UsersController.getUsers);
+router.post("/", UsersController.createUser);
 
 export default router;
