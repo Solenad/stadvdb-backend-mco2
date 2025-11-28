@@ -48,7 +48,25 @@ export const updateUserById = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const result = await UsersService.updateUserById();
+    const result = await UsersService.updateUserById(updates);
+
+    if (result.affectedRows === 0) {
+      res.status(404).json({ message: `No user found with id: ${id}` });
+    } else {
+      res
+        .status(200)
+        .json({ success: true, affected_rows: result.affectedRows });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const deleteUserById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await UsersService.deleteUserById(id);
 
     if (result.affectedRows === 0) {
       res.status(404).json({ message: `No user found with id: ${id}` });

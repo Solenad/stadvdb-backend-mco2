@@ -1,11 +1,7 @@
 import { initPools } from "../config/connect.js";
 
 export const createUser = async (data) => {
-  const pools = await initPools();
-  const node1 = pools.node1;
-  const node2 = pools.node2;
-  const node3 = pools.node3;
-
+  const { node1, node2, node3 } = await initPools();
   const connPrimary = await node2.getConnection();
   let connFragment = null;
 
@@ -52,10 +48,10 @@ export const createUser = async (data) => {
 
     try {
       await connPrimary.rollback();
-    } catch {}
+    } catch { }
     try {
       if (connFragment) await connFragment.rollback();
-    } catch {}
+    } catch { }
 
     connPrimary.release();
     if (connFragment) connFragment.release?.();
@@ -94,10 +90,7 @@ export const getAllUsersByDate = async (year) => {
 };
 
 export const updateUserById = async (id, data) => {
-  const pools = await initPools();
-  const node1 = pools.node1;
-  const node2 = pools.node2;
-  const node3 = pools.node3;
+  const { node1, node2, node3 } = await initPools();
 
   const connPrimary = await node2.getConnection();
 
@@ -179,13 +172,70 @@ export const updateUserById = async (id, data) => {
 
     try {
       await connPrimary.rollback();
-    } catch {}
+    } catch { }
     try {
       await connFragment.rollback();
-    } catch {}
+    } catch { }
 
     connPrimary.release();
     if (connFragment) connFragment.release();
+    throw err;
+  }
+};
+
+export const deleteUserById = async (id) => {
+  const { node1, node2, node3 } = await initPools();
+
+  const connPrimary = await node2.getConnection();
+
+  const [[user]] = await connPrimary.execute(
+    `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ?`,
+    [id]
+  );
+
+  if (!user) {
+    connPrimary.release();
+    return null;
+  }
+
+  if (user.year !== 2006 && user.year !== 2007) {
+    connPrimary.release();
+    throw new Error("Only users with DOB 2006 or 2007 can be deleted.");
+  }
+
+  const connFragment =
+    user.year === 2006
+      ? await node1.getConnection()
+      : await node3.getConnection();
+
+  try {
+    await connPrimary.beginTransaction();
+    await connFragment.beginTransaction();
+
+    await connPrimary.execute(`DELETE FROM Users WHERE id = ?`, [id]);
+
+    await connFragment.execute(`DELETE FROM Users WHERE id = ?`, [id]);
+
+    await connPrimary.commit();
+    await connFragment.commit();
+
+    connPrimary.release();
+    connFragment.release();
+
+    return { success: true };
+  } catch (err) {
+    console.error("Delete failed. Rolling back...", err);
+
+    try {
+      await connPrimary.rollback();
+    } catch { }
+    try {
+      await connFragment.rollback();
+    } catch { }
+
+    connPrimary.release();
+    connFragment.release();
+
     throw err;
   }
 };
