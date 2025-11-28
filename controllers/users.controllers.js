@@ -73,7 +73,9 @@ export const updateUserById = async (req, res) => {
 
     const isolation = req.query.isolation || null;
 
-    const result = await UsersService.updateUserById(id, updates, isolation);
+    const result = await UsersService.updateUserById(id, updates, {
+      isolation,
+    });
 
     if (!result) {
       return res.status(404).json({ message: `no user found with id: ${id}` });
