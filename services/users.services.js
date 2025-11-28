@@ -2,7 +2,7 @@ import { initPools } from "../config/connect.js";
 
 export const createUser = async (data) => {
   const { node1, node2, node3 } = await initPools();
-  const connPrimary = await node2.getConnection();
+  let connPrimary = null;
   let connFragment = null;
 
   try {
@@ -18,12 +18,9 @@ export const createUser = async (data) => {
     const columns = Object.keys(data);
     const placeholders = columns.map(() => "?").join(", ");
     const values = Object.values(data);
+    const insertSQL = `INSERT INTO Users (${columns.join(", ")}) VALUES (${placeholders})`;
 
-    const insertSQL = `
-      INSERT INTO Users (${columns.join(", ")})
-      VALUES (${placeholders})
-    `;
-
+    connPrimary = await node2.getConnection();
     await connPrimary.beginTransaction();
 
     const [result] = await connPrimary.execute(insertSQL, values);
@@ -36,26 +33,26 @@ export const createUser = async (data) => {
 
     await connFragment.execute(insertSQL, values);
 
-    await connPrimary.commit();
     await connFragment.commit();
-
-    connPrimary.release();
-    connFragment.release();
+    await connPrimary.commit();
 
     return { success: true, id: insertedId };
   } catch (err) {
     console.error("Insert failed. Rolling back...", err);
-
-    try {
-      await connPrimary.rollback();
-    } catch { }
-    try {
-      if (connFragment) await connFragment.rollback();
-    } catch { }
-
-    connPrimary.release();
-    if (connFragment) connFragment.release?.();
+    if (connPrimary) {
+      try {
+        await connPrimary.rollback();
+      } catch {}
+    }
+    if (connFragment) {
+      try {
+        await connFragment.rollback();
+      } catch {}
+    }
     throw err;
+  } finally {
+    if (connPrimary) connPrimary.release();
+    if (connFragment) connFragment.release();
   }
 };
 
@@ -89,40 +86,54 @@ export const getAllUsersByDate = async (year) => {
   }
 };
 
-export const updateUserById = async (id, data) => {
+export const updateUserById = async (
+  id,
+  data,
+  { isolation = null, syncReplicate = false } = {},
+) => {
   const { node1, node2, node3 } = await initPools();
-
-  const connPrimary = await node2.getConnection();
-
-  const [[user]] = await connPrimary.execute(
-    `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ?`,
-    [id],
-  );
-
-  if (!user) {
-    connPrimary.release();
-    return null;
-  }
-
-  if (user.year !== 2006 && user.year !== 2007) {
-    connPrimary.release();
-    throw new Error("Only users with DOB 2006 or 2007 can be updated.");
-  }
-
-  if (data.dateOfBirth) {
-    const newYear = new Date(data.dateOfBirth).getFullYear();
-    if (newYear !== 2006 && newYear !== 2007) {
-      connPrimary.release();
-      throw new Error("DOB must remain 2006 or 2007.");
-    }
-  }
-
-  const connFragment =
-    user.year === 2006
-      ? await node1.getConnection()
-      : await node3.getConnection();
+  let connPrimary = null;
+  let connFragment = null;
 
   try {
+    connPrimary = await node2.getConnection();
+
+    if (isolation) {
+      await connPrimary.query(
+        `SET SESSION TRANSACTION ISOLATION LEVEL ${isolation}`,
+      );
+    }
+    await connPrimary.beginTransaction();
+
+    const [[user]] = await connPrimary.execute(
+      `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ? FOR UPDATE`,
+      [id],
+    );
+
+    if (!user) {
+      await connPrimary.rollback();
+      return null;
+    }
+
+    if (user.year !== 2006 && user.year !== 2007) {
+      await connPrimary.rollback();
+      throw new Error("Only users with DOB 2006 or 2007 can be updated.");
+    }
+
+    if (data.dateOfBirth) {
+      const newYear = new Date(data.dateOfBirth).getFullYear();
+      if (newYear !== 2006 && newYear !== 2007) {
+        await connPrimary.rollback();
+        throw new Error("DOB must remain 2006 or 2007.");
+      }
+      if (newYear !== user.year) {
+        await connPrimary.rollback();
+        throw new Error(
+          "Changing DOB year across shards is not supported in this operation.",
+        );
+      }
+    }
+
     const allowedColumns = [
       "firstName",
       "lastName",
@@ -141,6 +152,7 @@ export const updateUserById = async (id, data) => {
 
     for (const column in data) {
       if (!allowedColumns.includes(column)) {
+        await connPrimary.rollback();
         throw new Error(`Unauthorized column: ${column}`);
       }
       setParts.push(`\`${column}\` = ?`);
@@ -148,94 +160,109 @@ export const updateUserById = async (id, data) => {
     }
 
     if (setParts.length === 0) {
+      await connPrimary.rollback();
       throw new Error("No valid columns provided.");
     }
 
-    const updateSQL = `UPDATE Users SET ${setParts.join(", ")} WHERE id = ?`;
     values.push(id);
+    const updateSQL = `UPDATE Users SET ${setParts.join(", ")} WHERE id = ?`;
 
-    await connPrimary.beginTransaction();
+    connFragment =
+      user.year === 2006
+        ? await node1.getConnection()
+        : await node3.getConnection();
+
     await connFragment.beginTransaction();
 
-    await connPrimary.execute(updateSQL, values);
-    await connFragment.execute(updateSQL, values);
+    const updatePrimaryPromise = connPrimary.execute(updateSQL, values);
+    const updateFragmentPromise = connFragment.execute(updateSQL, values);
 
-    await connPrimary.commit();
+    await Promise.all([updatePrimaryPromise, updateFragmentPromise]);
+
     await connFragment.commit();
-
-    connPrimary.release();
-    connFragment.release();
+    await connPrimary.commit();
 
     return { success: true };
   } catch (err) {
-    console.error("Update failed. Rolling back...", err);
-
-    try {
-      await connPrimary.rollback();
-    } catch { }
-    try {
-      await connFragment.rollback();
-    } catch { }
-
-    connPrimary.release();
-    if (connFragment) connFragment.release();
+    if (connPrimary) {
+      try {
+        await connPrimary.rollback();
+      } catch {}
+    }
+    if (connFragment) {
+      try {
+        await connFragment.rollback();
+      } catch {}
+    }
     throw err;
+  } finally {
+    if (connPrimary) connPrimary.release();
+    if (connFragment) connFragment.release();
   }
 };
 
 export const deleteUserById = async (id) => {
   const { node1, node2, node3 } = await initPools();
-
-  const connPrimary = await node2.getConnection();
-
-  const [[user]] = await connPrimary.execute(
-    `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ?`,
-    [id]
-  );
-
-  if (!user) {
-    connPrimary.release();
-    return null;
-  }
-
-  if (user.year !== 2006 && user.year !== 2007) {
-    connPrimary.release();
-    throw new Error("Only users with DOB 2006 or 2007 can be deleted.");
-  }
-
-  const connFragment =
-    user.year === 2006
-      ? await node1.getConnection()
-      : await node3.getConnection();
+  let connPrimary = null;
+  let connFragment = null;
 
   try {
+    connPrimary = await node2.getConnection();
+
     await connPrimary.beginTransaction();
+
+    const [[user]] = await connPrimary.execute(
+      `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ? FOR UPDATE`,
+      [id],
+    );
+
+    if (!user) {
+      await connPrimary.rollback();
+      return null;
+    }
+
+    if (user.year !== 2006 && user.year !== 2007) {
+      await connPrimary.rollback();
+      throw new Error("Only users with DOB 2006 or 2007 can be deleted.");
+    }
+
+    connFragment =
+      user.year === 2006
+        ? await node1.getConnection()
+        : await node3.getConnection();
+
     await connFragment.beginTransaction();
 
-    await connPrimary.execute(`DELETE FROM Users WHERE id = ?`, [id]);
+    const deletePrimaryPromise = connPrimary.execute(
+      `DELETE FROM Users WHERE id = ?`,
+      [id],
+    );
+    const deleteFragmentPromise = connFragment.execute(
+      `DELETE FROM Users WHERE id = ?`,
+      [id],
+    );
 
-    await connFragment.execute(`DELETE FROM Users WHERE id = ?`, [id]);
+    await Promise.all([deletePrimaryPromise, deleteFragmentPromise]);
 
-    await connPrimary.commit();
     await connFragment.commit();
-
-    connPrimary.release();
-    connFragment.release();
+    await connPrimary.commit();
 
     return { success: true };
   } catch (err) {
     console.error("Delete failed. Rolling back...", err);
-
-    try {
-      await connPrimary.rollback();
-    } catch { }
-    try {
-      await connFragment.rollback();
-    } catch { }
-
-    connPrimary.release();
-    connFragment.release();
-
+    if (connPrimary) {
+      try {
+        await connPrimary.rollback();
+      } catch {}
+    }
+    if (connFragment) {
+      try {
+        await connFragment.rollback();
+      } catch {}
+    }
     throw err;
+  } finally {
+    if (connPrimary) connPrimary.release();
+    if (connFragment) connFragment.release();
   }
 };
