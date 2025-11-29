@@ -14,7 +14,7 @@ const startServer = async () => {
     app.use(json());
     app.use(urlencoded({ extended: true }));
 
-    app.use("/users", usersRouter);
+    app.use("/api/users", usersRouter); // changed this from /users
 
     app.get("/", (req, res) => {
       res.status(200).json({
