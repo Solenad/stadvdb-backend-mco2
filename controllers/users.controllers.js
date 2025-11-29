@@ -96,7 +96,7 @@ export const updateUserById = async (req, res) => {
   }
 };
 
-export const deleteuserbyid = async (req, res) => {
+export const deleteUserById = async (req, res) => {
   try {
     const { id } = req.params;
 
