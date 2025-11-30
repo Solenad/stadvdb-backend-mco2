@@ -2,9 +2,7 @@ import mysql from "mysql2/promise";
 import { setTimeout as sleep } from "timers/promises";
 import "dotenv/config";
 
-let node1 = null;
-let node2 = null;
-let node3 = null;
+let dbnodes = null;
 
 const MAX_RETRIES = 5;
 
@@ -53,48 +51,66 @@ async function connectWithRetry(pool, label) {
 }
 
 export const initPools = async () => {
-  if (node1 && node2 && node3) return { node1, node2, node3 };
+  if (dbnodes != null && dbnodes.length === 3) return { dbnodes };
 
   console.log("Initializing Nodes 1, 2, and 3...");
-
-  node1 = createPool(process.env.NODE1_PORT);
-  node2 = createPool(process.env.NODE2_PORT);
-  node3 = createPool(process.env.NODE3_PORT);
+    dbnodes = [
+      {pool: createPool(process.env.NODE1_PORT), role: 'SLAVE 06', status: 'UP', node: '1'},
+      {pool: createPool(process.env.NODE2_PORT), role: 'MASTER', status: 'UP', node: '2'},
+      {pool: createPool(process.env.NODE3_PORT), role: 'SLAVE 07', status: 'UP', node: '3'},
+    ];
 
   await Promise.all([
-    connectWithRetry(node1, "Node 1 (2006 Fragment)"),
-    connectWithRetry(node2, "Node 2 (Full Replica)"),
-    connectWithRetry(node3, "Node 3 (2007 Fragment)"),
+    connectWithRetry(dbnodes[0], `Node ${dbnodes[0].node}, ${dbnodes[0].role}`),
+    connectWithRetry(dbnodes[1], `Node ${dbnodes[1].node}, ${dbnodes[1].role}`),
+    connectWithRetry(dbnodes[2], `Node ${dbnodes[2].node}, ${dbnodes[2].role}`),
   ]);
 
   console.log("Connected to all nodes successfully.");
 
-  return { node1, node2, node3 };
+  return { dbnodes };
 };
 
-export const masterClose = async () => {
-  try {
-    if (node2) await node2.end();
+export const closeNode = async (nodeId) => {
+  const chosenNode = dbnodes.find(dbnode => dbnode.node === nodeId);
 
-  } catch (err) {
-    console.error("Error closing master pools:", err);
+  if (!chosenNode) {
+    console.warn(`Node with ID ${nodeId} not found in DB_NODES.`);
+    return;
   }
-};
 
-export const slaveClose = async () => {
+  if (chosenNode.status === 'DOWN') {
+    console.log(`Node ${nodeId} is already down.`);
+    return;
+  }
+
   try {
-    if (node1) await node1.end();
-    if (node3) await node3.end();
+    await chosenNode.pool.end();
+    chosenNode.status = "DOWN";
+    console.log(`Node ${nodeId} (${chosenNode.role}) DB pool closed.`);
+
+    return { node: chosenNode.node, status: chosenNode.status };
+
   } catch (err) {
-    console.error("Error closing slave pools:", err);
+    console.error("Error closing downed pool:", err);
+    chosenNode.status = "DOWN";
+    throw err;
   }
 };
 
 export const closePools = async () => {
   try {
 
-    await masterClose();
-    await slaveClose();
+    const masterNode = dbnodes.find(node => node.role === 'MASTER');
+    if (masterNode) {
+      await closeNode(masterNode.node);
+    }
+    
+    const slaveClosures = dbnodes
+        .filter(node => node.role.startsWith('SLAVE') && node.status === 'UP')
+        .map(node => closeNode(node.node));
+
+    await Promise.all(slaveClosures);
 
     console.log("All DB pools closed.");
   } catch (err) {
