@@ -72,9 +72,11 @@ export const updateUserById = async (req, res) => {
     const updates = req.body;
 
     const isolation = req.query.isolation || null;
+    const mode = req.query.mode || null;
 
     const result = await UsersService.updateUserById(id, updates, {
       isolation,
+      mode,
     });
 
     if (!result) {
@@ -114,3 +116,40 @@ export const deleteUserById = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+export const recoverCentral = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const result = await UsersService.recoverCentral(id)
+
+    if (!result.recovered) {
+      return res.status(404).json(result);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Central node recovered.",
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+export const recoverFragment = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const result = await UsersService.recoverFragment(id);
+
+    if (!result.recovered) {
+      return res.status(404).json(result);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Fragment node recovered.",
+      targetYear: result.targetYear,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
