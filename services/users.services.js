@@ -106,7 +106,8 @@ export const updateUserById = async (
     await connPrimary.beginTransaction();
 
     const [[user]] = await connPrimary.execute(
-      `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ? FOR UPDATE`,
+      `SELECT id, YEAR(STR_TO_DATE(dateOfBirth, '%m/%d/%Y')) AS year
+      FROM Users WHERE id = ? FOR UPDATE`,
       [id],
     );
 
