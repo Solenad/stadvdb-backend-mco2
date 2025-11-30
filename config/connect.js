@@ -75,7 +75,7 @@ export const closeNode = async (nodeId) => {
   const chosenNode = dbnodes.find(dbnode => dbnode.node === nodeId);
 
   if (!chosenNode) {
-    console.warn(`Node with ID ${nodeId} not found in DB_NODES.`);
+    console.log(`Node ${nodeId} not found in the servers.`);
     return;
   }
 

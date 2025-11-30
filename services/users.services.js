@@ -1,9 +1,40 @@
 import { initPools } from "../config/connect.js";
 
+export const getWritePool = async () => {
+  const { dbnodes }  = await initPools();
+
+  try {
+    const masterNode = dbnodes.find(node => node.role === 'MASTER' && node.status === 'UP');
+
+    return masterNode.pool;
+  }
+  catch (err) {
+    console.error("Error finding master node:", err);
+  }
+};
+
+export const getReadPool = async (option) => {
+  const { dbnodes }  = await initPools();
+  
+  try {
+    const slaveNodes = dbnodes.filter(node => node.role.startsWith('SLAVE') && node.status === 'UP');
+
+    const selectedPool = slaveNodes.find(node => node.role === option);
+
+    return selectedPool.pool;
+  }
+  catch (err) {
+    console.error("Error finding slave nodes:", err);
+  }
+};
+
+//removed fragment as its not allowed to be inserted into, only primary which is the master node
 export const createUser = async (data) => {
-  const { node1, node2, node3 } = await initPools();
+  const masterNode = await getWritePool();
+  /*const { slave06 } = await getReadPool("SLAVE 06");
+  const { slave07 } = await getReadPool("SLAVE 07");*/
   let connPrimary = null;
-  let connFragment = null;
+  //let connFragment = null;
 
   try {
     if (!data.dateOfBirth) {
@@ -20,20 +51,20 @@ export const createUser = async (data) => {
     const values = Object.values(data);
     const insertSQL = `INSERT INTO Users (${columns.join(", ")}) VALUES (${placeholders})`;
 
-    connPrimary = await node2.getConnection();
+    connPrimary = await masterNode.getConnection();
     await connPrimary.beginTransaction();
 
     const [result] = await connPrimary.execute(insertSQL, values);
     const insertedId = result.insertId;
 
-    connFragment =
+    /*connFragment =
       year === 2006 ? await node1.getConnection() : await node3.getConnection();
 
     await connFragment.beginTransaction();
 
     await connFragment.execute(insertSQL, values);
 
-    await connFragment.commit();
+    await connFragment.commit();*/
     await connPrimary.commit();
 
     return { success: true, id: insertedId };
@@ -44,42 +75,54 @@ export const createUser = async (data) => {
         await connPrimary.rollback();
       } catch {}
     }
-    if (connFragment) {
+    /*if (connFragment) {
       try {
         await connFragment.rollback();
       } catch {}
-    }
+    }*/
     throw err;
   } finally {
     if (connPrimary) connPrimary.release();
-    if (connFragment) connFragment.release();
+    //if (connFragment) connFragment.release();
   }
 };
 
 export const getAllUsers = async () => {
-  const pools = await initPools();
-  const node1 = pools.node1;
-  const [rows] = await node1.query("SELECT * FROM Users");
-  return rows || null;
+  const slave06 = await getReadPool("SLAVE 06");
+  const slave07 = await getReadPool("SLAVE 07");
+  const [rows06, rows07] = await Promise.all([
+    slave06.query("SELECT * FROM Users"),
+    slave07.query("SELECT * FROM Users"),
+  ]);
+
+  return [...rows06, ...rows07] || null;
 };
 
 export const getUserById = async (id) => {
-  const pools = await initPools();
-  const node1 = pools.node1;
-  const [rows] = await node1.query("SELECT * FROM Users WHERE id = ?", [id]);
-  return rows[0] || null;
+  const slave06 = await getReadPool("SLAVE 06");
+  const slave07 = await getReadPool("SLAVE 07");
+  const [rows06, rows07] = await Promise.all([
+    slave06.query("SELECT * FROM Users WHERE id = ?", [id]),
+    slave07.query("SELECT * FROM Users WHERE id = ?", [id]),
+  ]);
+
+  const users06 = rows06[0];
+  const users07 = rows07[0];
+
+  const user = users06[0] || users07[0];
+
+  return user || null;
 };
 
 export const getAllUsersByDate = async (year) => {
-  const pools = await initPools();
-  const node1 = pools.node1;
-  const node3 = pools.node3;
+  const slave06 = await getReadPool("SLAVE 06");
+  const slave07 = await getReadPool("SLAVE 07");
 
   if (year === 2006) {
-    const [rows] = await node1.query("SELECT * FROM Users");
+    const [rows] = await slave06.query("SELECT * FROM Users");
     return rows;
   } else if (year === 2007) {
-    const [rows] = await node3.query("SELECT * FROM Users");
+    const [rows] = await slave07.query("SELECT * FROM Users");
     return rows;
   } else {
     return null;
@@ -91,12 +134,12 @@ export const updateUserById = async (
   data,
   { isolation = null, syncReplicate = false } = {},
 ) => {
-  const { node1, node2, node3 } = await initPools();
+  const masterNode = await getWritePool();
   let connPrimary = null;
-  let connFragment = null;
+  //let connFragment = null;
 
   try {
-    connPrimary = await node2.getConnection();
+    connPrimary = await masterNode.getConnection();
 
     if (isolation) {
       await connPrimary.query(
@@ -168,19 +211,19 @@ export const updateUserById = async (
     values.push(id);
     const updateSQL = `UPDATE Users SET ${setParts.join(", ")} WHERE id = ?`;
 
-    connFragment =
+    /*connFragment =
       user.year === 2006
         ? await node1.getConnection()
         : await node3.getConnection();
 
-    await connFragment.beginTransaction();
+    await connFragment.beginTransaction();*/
 
     const updatePrimaryPromise = connPrimary.execute(updateSQL, values);
-    const updateFragmentPromise = connFragment.execute(updateSQL, values);
+    //const updateFragmentPromise = connFragment.execute(updateSQL, values);
 
     await Promise.all([updatePrimaryPromise, updateFragmentPromise]);
 
-    await connFragment.commit();
+    //await connFragment.commit();
     await connPrimary.commit();
 
     return { success: true };
@@ -190,25 +233,25 @@ export const updateUserById = async (
         await connPrimary.rollback();
       } catch {}
     }
-    if (connFragment) {
+    /*if (connFragment) {
       try {
         await connFragment.rollback();
       } catch {}
-    }
+    }*/
     throw err;
   } finally {
     if (connPrimary) connPrimary.release();
-    if (connFragment) connFragment.release();
+    //if (connFragment) connFragment.release();
   }
 };
 
 export const deleteUserById = async (id) => {
-  const { node1, node2, node3 } = await initPools();
+  const masterNode = await getWritePool();
   let connPrimary = null;
-  let connFragment = null;
+  //let connFragment = null;
 
   try {
-    connPrimary = await node2.getConnection();
+    connPrimary = await masterNode.getConnection();
 
     await connPrimary.beginTransaction();
 
@@ -227,25 +270,25 @@ export const deleteUserById = async (id) => {
       throw new Error("Only users with DOB 2006 or 2007 can be deleted.");
     }
 
-    connFragment =
+    /*connFragment =
       user.year === 2006
         ? await node1.getConnection()
         : await node3.getConnection();
 
-    await connFragment.beginTransaction();
+    await connFragment.beginTransaction();*/
 
     const deletePrimaryPromise = connPrimary.execute(
       `DELETE FROM Users WHERE id = ?`,
       [id],
     );
-    const deleteFragmentPromise = connFragment.execute(
+    /*const deleteFragmentPromise = connFragment.execute(
       `DELETE FROM Users WHERE id = ?`,
       [id],
-    );
+    );*/
 
-    await Promise.all([deletePrimaryPromise, deleteFragmentPromise]);
+    await Promise.all([deletePrimaryPromise/*, deleteFragmentPromise*/]);
 
-    await connFragment.commit();
+    //await connFragment.commit();
     await connPrimary.commit();
 
     return { success: true };
@@ -256,14 +299,14 @@ export const deleteUserById = async (id) => {
         await connPrimary.rollback();
       } catch {}
     }
-    if (connFragment) {
+    /*if (connFragment) {
       try {
         await connFragment.rollback();
       } catch {}
-    }
+    }*/
     throw err;
   } finally {
     if (connPrimary) connPrimary.release();
-    if (connFragment) connFragment.release();
+    //if (connFragment) connFragment.release();
   }
 };
