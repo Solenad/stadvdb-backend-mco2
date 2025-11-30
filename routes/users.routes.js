@@ -9,5 +9,6 @@ router.put("/:id", UsersController.updateUserById);
 router.get("/", UsersController.getUsers);
 router.post("/", UsersController.createUser);
 router.delete("/:id", UsersController.deleteUserById);
-
+router.post("/recovery/central/:id", UsersController.recoverCentral);
+router.post("/recovery/fragment/:id", UsersController.recoverFragment);
 export default router;
