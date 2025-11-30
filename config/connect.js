@@ -72,11 +72,29 @@ export const initPools = async () => {
   return { node1, node2, node3 };
 };
 
-export const closePools = async () => {
+export const masterClose = async () => {
+  try {
+    if (node2) await node2.end();
+
+  } catch (err) {
+    console.error("Error closing master pools:", err);
+  }
+};
+
+export const slaveClose = async () => {
   try {
     if (node1) await node1.end();
-    if (node2) await node2.end();
     if (node3) await node3.end();
+  } catch (err) {
+    console.error("Error closing slave pools:", err);
+  }
+};
+
+export const closePools = async () => {
+  try {
+
+    await masterClose();
+    await slaveClose();
 
     console.log("All DB pools closed.");
   } catch (err) {
