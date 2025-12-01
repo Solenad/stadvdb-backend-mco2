@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
 import { setTimeout as sleep } from "timers/promises";
+import { recoverOldMaster } from "../services/recovery.service.js";
 import "dotenv/config";
 
 let dbnodes = null;
@@ -55,9 +56,9 @@ export const initPools = async () => {
 
   console.log("Initializing Nodes 1, 2, and 3...");
     dbnodes = [
-      {pool: createPool(process.env.NODE1_PORT), role: 'SLAVE 06', status: 'UP', node: '1'},
-      {pool: createPool(process.env.NODE2_PORT), role: 'MASTER', status: 'UP', node: '2'},
-      {pool: createPool(process.env.NODE3_PORT), role: 'SLAVE 07', status: 'UP', node: '3'},
+      {pool: createPool(process.env.NODE1_PORT),host: process.env.NODE1_IP, role: 'SLAVE 06', status: 'UP', node: '1'},
+      {pool: createPool(process.env.NODE2_PORT),host: process.env.NODE2_IP, role: 'MASTER', status: 'UP', node: '2'},
+      {pool: createPool(process.env.NODE3_PORT),host: process.env.NODE3_IP, role: 'SLAVE 07', status: 'UP', node: '3'},
     ];
 
   await Promise.all([
@@ -117,3 +118,19 @@ export const closePools = async () => {
     console.error("Error closing pools:", err);
   }
 };
+
+//Checks for downed master nodes until it goes back up
+setInterval(async () => {
+  if (!dbnodes) return;
+  const deadNode = dbnodes.find(node => node.status === 'DOWN');
+
+  if (deadNode) {
+    try {
+      const conn = await deadNode.pool.getConnection();
+      conn.release();
+      await recoverOldMaster(deadNode.node);
+
+    } catch (err) {console.log(`Node ${deadNode.node} is still unreachable.`);
+    }
+  }
+}, 10000);

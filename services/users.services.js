@@ -9,7 +9,19 @@ export const getWritePool = async () => {
     return masterNode.pool;
   }
   catch (err) {
-    console.error("Error finding master node:", err);
+    console.error("Error connecting to master node:", err);
+    try {
+            await changeMasterNode(masterNode.node, dbnodes);
+            masterNode = dbnodes.find(node => node.role === 'MASTER' && node.status === 'UP');
+            
+            if (!masterNode) throw new Error("Failover failed: No new Master found.");
+            
+            return masterNode.pool;
+
+        } catch (failoverErr) {
+            console.error("System is completely down. Failover failed.", failoverErr);
+            throw failoverErr;
+        }
   }
 };
 
