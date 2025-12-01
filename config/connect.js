@@ -62,9 +62,9 @@ export const initPools = async () => {
     ];
 
   await Promise.all([
-    connectWithRetry(dbnodes[0], `Node ${dbnodes[0].node}, ${dbnodes[0].role}`),
-    connectWithRetry(dbnodes[1], `Node ${dbnodes[1].node}, ${dbnodes[1].role}`),
-    connectWithRetry(dbnodes[2], `Node ${dbnodes[2].node}, ${dbnodes[2].role}`),
+    connectWithRetry(dbnodes[0].pool, `Node ${dbnodes[0].node}, ${dbnodes[0].role}`),
+    connectWithRetry(dbnodes[1].pool, `Node ${dbnodes[1].node}, ${dbnodes[1].role}`),
+    connectWithRetry(dbnodes[2].pool, `Node ${dbnodes[2].node}, ${dbnodes[2].role}`),
   ]);
 
   console.log("Connected to all nodes successfully.");
