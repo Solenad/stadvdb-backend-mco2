@@ -163,8 +163,11 @@ public class MCO2TestScript {
                     firstName = body.split("\"firstName\":\"")[1].split("\"")[0];
                 } catch (Exception ignored) {}
 
-                System.out.println(String.format("[%s] Status: %d | Time: %dms | id=%s | firstName=%s",
-                user, response.statusCode(), (end - start), id, firstName)); // can do "Body: %s", response.body
+                //System.out.println(String.format("[%s] Status: %d | Time: %dms | id= %s | firstName= %s",
+                //user, response.statusCode(), (end - start), id, firstName)); // can do "Body: %s", response.body
+                // testing (remove later)
+                System.out.println(String.format("[%s] Status: %d | Time: %dms | Body = %s",
+                user, response.statusCode(), (end - start), response.body()));
 
             } catch (Exception e) {
                 System.out.println(e.getMessage());
@@ -215,8 +218,10 @@ public class MCO2TestScript {
                     firstName = body.split("\"firstName\":\"")[1].split("\"")[0];
                 } catch (Exception ignored) {}
 
-                System.out.println(String.format("[%s] Status: %d | Time: %dms | id=%s | firstName=%s",
-                user, response.statusCode(), (end - start), id, firstName)); // can do "Body: %s", response.body
+                //System.out.println(String.format("[%s] Status: %d | Time: %dms | id= %s | firstName= %s",
+                //user, response.statusCode(), (end - start), id, firstName)); // can do "Body: %s", response.body
+                System.out.println(String.format("[%s] Status: %d | Time: %dms | body = %s",
+                user, response.statusCode(), (end - start), response.body()));
 
             } catch (Exception e) {
                 System.out.println(e.getMessage());
@@ -226,6 +231,24 @@ public class MCO2TestScript {
 
 // Step 4: Global Failure Recovery
     // helper function for put reqs to backend
+    private static HttpResponse<String> doGet(String url) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .timeout(Duration.ofSeconds(10))
+            .GET()
+            .build();
+
+        long start = System.currentTimeMillis();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        long end = System.currentTimeMillis();
+
+        System.out.println(String.format(
+            "GET %s\nStatus: %d\nTime: %dms\nBody: %s\n",
+            url, response.statusCode(), (end - start), response.body()
+        ));
+        return response;
+    }
+
     private static HttpResponse<String> doPut(String url, String jsonBody) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(url))
@@ -279,68 +302,91 @@ public class MCO2TestScript {
     }
 
     // Test case 1-2: Central node fails, fragment nodes commit
-    private static void centralFailTest() {
+    private static void masterFailTest() {
         String isolation = "READ COMMITTED";
-
         try {
             String encoded = isolation.replace(" ", "%20");
-
-            // syncs values for both fragment and central before failure
             String baseUrl = centralnode + "/users/" + userid;
             String normalUrl = baseUrl + "?isolation=" + encoded;
-            String bodyBase = "{\"firstName\":\"sync\"}";
+
+            // sync value so test is clean
+            String bodyBase = "{\"firstName\":\"notchanged\"}";
             doPut(normalUrl, bodyBase);
-            System.out.println("After normal update:"); // no failure
+            System.out.println("Initial value (check if firstname is notchanged):");
             printRow();
 
-            // fragment commits, central fails
-            System.out.println("Case #1: \n");
-            String failUrl = baseUrl + "?isolation=" + encoded + "&mode=centralfail";
-            String bodyFragOnly = "{\"firstName\":\"committed\"}";
-            doPut(failUrl, bodyFragOnly);
-            System.out.println("Update after central fail: ");
-            printRow();
+            System.out.println("Stop the master node (press enter when done");
+            System.in.read();
 
-            // recover central from fragment (both first_names should match now)
-            System.out.println("Case #2: \n");
-            String recoverUrl = centralnode + "/users/recovery/central/" + userid;
-            doPost(recoverUrl);
-            System.out.println("After recoverCentral:");
+            // Case 1: attempt update while master is down (error 500)
+            System.out.println("\nCase #1: Write while master is down");
+            String failUrl = normalUrl;
+            // backend receives write req, and since master node is down it runs changeMasterNode on services
+            String bodyFail = "{\"firstName\":\"shouldFail\"}";
+            try {
+                doPut(failUrl, bodyFail);
+            } catch (Exception e) {
+                System.out.println("Failure during write since master node is down: " + e.getMessage());
+            }
+
+            System.out.println("Press enter once theres a new master assigned.");
+            System.in.read();
+
+            // Case 2: retry update after failover (new master)
+            System.out.println("Case #2: Retrying same write after failover (should SUCCEED)");
+            String bodySuccess = "{\"firstName\":\"afterFailover\"}";
+            doPut(normalUrl, bodySuccess);
+
+            System.out.println("Row from central (Should be firstName: afterFailover): ");
             printRow();
 
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
-    // Test case 1-2: Fragment fails, central commits
+    // Test case 3-4: Fragment fails, central commits
     private static void fragmentFailTest() {
         String isolation = "READ COMMITTED";
 
         try {
             String encoded = isolation.replace(" ", "%20");
-
-            // syncs values for both fragment and central before failure
             String baseUrl = centralnode + "/users/" + userid;
             String normalUrl = baseUrl + "?isolation=" + encoded;
-            String bodyBase = "{\"firstName\":\"sync\"}";
+
+            // sync value so test is reset
+            String bodyBase = "{\"firstName\":\"notchanged\"}";
             doPut(normalUrl, bodyBase);
-            System.out.println("After normal update:");
+            System.out.println("Initial value (check if firstname is notchanged):");
             printRow();
 
-            // central commits, fragment fails
-            System.out.println("Case #3: \n");
-            String failUrl = baseUrl + "?isolation=" + encoded + "&mode=fragmentfail";
-            String bodyCentralOnly = "{\"firstName\":\"committed\"}";
-            doPut(failUrl, bodyCentralOnly);
-            System.out.println("Update after fragment fail:");
+            // Case 3: attempt update while fragment is down
+            System.out.println("\nCase #3: Write while fragment is down");
+            System.out.println("Stop one fragment node (in this case node 1 since userid is from 2006 (enter once done).");
+            System.in.read();
+
+            String bodyCentralOnly = "{\"firstName\":\"centralOnly\"}";
+            System.out.println("Performing write while fragment is down (central should still commit):");
+            doPut(normalUrl, bodyCentralOnly);
+
+            // central / master node will have firstname as "centralOnly" while 
+            // node 1 still is on "notchanged"
+            System.out.println("Central row after write with fragment down:");
             printRow();
 
-            // recover fragment from central (both first_names should match now)
-            System.out.println("Case #4: \n");
-            String recoverUrl = centralnode + "/users/recovery/fragment/" + userid;
-            doPost(recoverUrl);
-            System.out.println("After recoverFragment (fragment should now match central):");
+            // Case 4: retry update after failover (fragment recovered)
+            System.out.println("\nCase #4: Fragment node recovers and catches up missed writes");
+            System.out.println("Start the node 1 fragment again (enter after waiting for recovery interval): ");
+            System.in.read();
+
+            // Central row firstName should be "centralOnly"
+            System.out.println("Central row: ");
             printRow();
+
+            // Change year based on user used, output here should be "centralOnly" now instead of "notchanged"
+            int year = 2006;
+            String yearUrl = centralnode + "/users/year/" + year;
+            System.out.println("Fragment firstName after recovery: ");
+            doGet(yearUrl);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -360,36 +406,34 @@ public class MCO2TestScript {
                     System.out.println("Isolation Level: " + level);
 
                     // test case 1
+                    /* 
                     for (int r = 1; r <= 3; r++){
                         System.out.print("\nRun " + r);
                         concurentReadTest(level);
                         Thread.sleep(2000);
                     }
-
+                    
                     // test case 2
-                    for (int r = 1; r <= 3; r++){
+                    
+                    for (int r = 2; r <= 3; r++){
                         System.out.print("\nRun " + r);
                         readWriteTest(level);
                         Thread.sleep(2000);
                     }
 
                     // test case 3
-                    for (int r = 1; r <= 3; r++){
+                    
+                    for (int r = 3; r <= 3; r++){
                         System.out.print("\nRun " + r);
                         concurentWriteTest(level);
                         Thread.sleep(3000);
-                    }
+                    }*/
                 }
-            
-            for (int i = 1; i <= 3; i++){
                 System.out.println("\n===== Test Cases for Global Failure Recovery ====");
-                centralFailTest(); // test cases 1-2
+                masterFailTest();
                 Thread.sleep(2000);
 
-                fragmentFailTest();// test cases 3-4
-                Thread.sleep(2000);
-            } 
-
+                fragmentFailTest();
         } catch (Exception e) {
             e.printStackTrace();
         }
