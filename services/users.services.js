@@ -402,4 +402,4 @@ export const deleteUserById = async (id) => {
     if (connPrimary) connPrimary.release();
     //if (connFragment) connFragment.release();
   }
-};
+}; 
