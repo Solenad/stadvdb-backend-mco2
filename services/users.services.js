@@ -1,43 +1,89 @@
-import { initPools } from "../config/connect.js";
+import { getNode1, getNode3, initPools } from "../config/connect.js";
+import { changeMasterNode } from "../services/recovery.service.js";
 
 export const getWritePool = async () => {
   const { dbnodes }  = await initPools();
 
-  try {
-    const masterNode = dbnodes.find(node => node.role === 'MASTER' && node.status === 'UP');
+  let masterNode = dbnodes.find(
+    (node) => node.role === "MASTER"
+  );
 
+  if (!masterNode) {
+    throw new Error("No master node found.");
+  }
+
+  try {
+    const testConn = await masterNode.pool.getConnection();
+    testConn.release();
     return masterNode.pool;
   }
   catch (err) {
     console.error("Error connecting to master node:", err);
     try {
-            await changeMasterNode(masterNode.node, dbnodes);
-            masterNode = dbnodes.find(node => node.role === 'MASTER' && node.status === 'UP');
-            
-            if (!masterNode) throw new Error("Failover failed: No new Master found.");
-            
-            return masterNode.pool;
+      await changeMasterNode(masterNode.node);
 
-        } catch (failoverErr) {
-            console.error("System is completely down. Failover failed.", failoverErr);
-            throw failoverErr;
-        }
+      const { dbnodes: updatedNodes } = await initPools();
+      const newMaster = updatedNodes.find(
+        (node) => node.role === "MASTER" && node.status === "UP"
+      );
+
+      if (!newMaster) {
+        throw new Error("Failover failed: No new Master found.");
+      }
+
+      const verifyConn = await newMaster.pool.getConnection();
+      verifyConn.release();
+
+      console.log(`Failover complete. New master is Node ${newMaster.node}.`);
+      return newMaster.pool;
+    } catch (failoverErr) {
+      console.error("System is completely down. Failover failed.", failoverErr);
+      throw failoverErr;
+    }
   }
 };
 
 export const getReadPool = async (option) => {
-  const { dbnodes }  = await initPools();
-  
-  try {
-    const slaveNodes = dbnodes.filter(node => node.role.startsWith('SLAVE') && node.status === 'UP');
+  const { dbnodes } = await initPools();
 
-    const selectedPool = slaveNodes.find(node => node.role === option);
+  // marks down if node unreachable
+  const checkNode = async (node) => {
+    if (!node) return false;
+    try {
+      const conn = await node.pool.getConnection();
+      conn.release();
+      return true;
+    } catch (err) {
+      console.error(
+        `Read node ${node.node} (${node.role}) unreachable:`,
+        err.message,
+      );
+      node.status = "DOWN";
+      return false;
+    }
+  };
 
-    return selectedPool.pool;
+  // specific slave role
+  let candidate = dbnodes.find(
+    (n) => n.role === option && n.role.startsWith("SLAVE"),
+  );
+
+  if (candidate && (await checkNode(candidate))) {
+    return candidate.pool;
   }
-  catch (err) {
-    console.error("Error finding slave nodes:", err);
+
+  const slaves = dbnodes.filter((n) => n.role.startsWith("SLAVE"));
+  for (const node of slaves) {
+    if (await checkNode(node)) {
+      console.warn(
+        `Read pool ${option} not available, using ${node.role} on Node ${node.node} instead.`,
+      );
+      return node.pool;
+    }
   }
+
+  // fall back to master node
+  throw new Error("No available slave node for read operations.");
 };
 
 //removed fragment as its not allowed to be inserted into, only primary which is the master node
@@ -111,19 +157,34 @@ export const getAllUsers = async () => {
 };
 
 export const getUserById = async (id) => {
-  const slave06 = await getReadPool("SLAVE 06");
-  const slave07 = await getReadPool("SLAVE 07");
-  const [rows06, rows07] = await Promise.all([
-    slave06.query("SELECT * FROM Users WHERE id = ?", [id]),
-    slave07.query("SELECT * FROM Users WHERE id = ?", [id]),
-  ]);
+  // read from slave first
+  try {
+    const slave06 = await getReadPool("SLAVE 06");
+    const slave07 = await getReadPool("SLAVE 07");
 
-  const users06 = rows06[0];
-  const users07 = rows07[0];
+    const [rows06, rows07] = await Promise.all([
+      slave06.query("SELECT * FROM Users WHERE id = ?", [id]),
+      slave07.query("SELECT * FROM Users WHERE id = ?", [id]),
+    ]);
 
-  const user = users06[0] || users07[0];
+    const users06 = rows06[0];
+    const users07 = rows07[0];
+    const user = (users06 && users06[0]) || (users07 && users07[0]);
 
-  return user || null;
+    if (user) {
+      return user;
+    }
+  } catch (err) {
+    console.error("Read from slaves failed, will try master:", err.message);
+  }
+
+  // read from central if nothing works from slave nodes
+  const masterPool = await getWritePool();
+  const [rows] = await masterPool.query(
+    "SELECT * FROM Users WHERE id = ?",
+    [id],
+  );
+  return rows[0] || null;
 };
 
 export const getAllUsersByDate = async (year) => {
@@ -148,7 +209,7 @@ export const updateUserById = async (
 ) => {
   const masterNode = await getWritePool();
   let connPrimary = null;
-  //let connFragment = null;
+  let connFragment = null;
 
   try {
     connPrimary = await masterNode.getConnection();
@@ -223,21 +284,36 @@ export const updateUserById = async (
     values.push(id);
     const updateSQL = `UPDATE Users SET ${setParts.join(", ")} WHERE id = ?`;
 
-    /*connFragment =
-      user.year === 2006
-        ? await node1.getConnection()
-        : await node3.getConnection();
+    const fragmentPool = user.year === 2006 ? getNode1() : getNode3();
+    const isSamePool = fragmentPool === masterNode;
 
-    await connFragment.beginTransaction();*/
-
-    const updatePrimaryPromise = connPrimary.execute(updateSQL, values);
-    //const updateFragmentPromise = connFragment.execute(updateSQL, values);
-
-    await Promise.all([updatePrimaryPromise, updateFragmentPromise]);
-
-    //await connFragment.commit();
+    await connPrimary.execute(updateSQL, values);
     await connPrimary.commit();
 
+    if (!isSamePool) {
+      try {
+        connFragment = await fragmentPool.getConnection();
+
+        if (isolation) {
+          await connFragment.query(
+            `SET SESSION TRANSACTION ISOLATION LEVEL ${isolation}`,
+          );
+        }
+        await connFragment.beginTransaction();
+        await connFragment.execute(updateSQL, values);
+        await connFragment.commit();
+      } catch (fragErr) {
+        console.error(
+          "Fragment update failed (will rely on recovery service):",
+          fragErr,
+        );
+        if (connFragment) {
+          try {
+            await connFragment.rollback();
+          } catch {}
+        }
+      }
+    } 
     return { success: true };
   } catch (err) {
     if (connPrimary) {
@@ -245,15 +321,15 @@ export const updateUserById = async (
         await connPrimary.rollback();
       } catch {}
     }
-    /*if (connFragment) {
+    if (connFragment) {
       try {
         await connFragment.rollback();
       } catch {}
-    }*/
+    }
     throw err;
   } finally {
     if (connPrimary) connPrimary.release();
-    //if (connFragment) connFragment.release();
+    if (connFragment) connFragment.release();
   }
 };
 

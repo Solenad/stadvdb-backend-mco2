@@ -1,4 +1,4 @@
-import { dbnodes } from '../config/connect.js';
+import { initPools } from '../config/connect.js';   
 import "dotenv/config";
 
 export const promoteSlave = async (node) => {
@@ -57,7 +57,9 @@ export const assignSlave = async (slaveNodes, masterNode) => {
     }
 };
 
-export const changeMasterNode = async (downNodeId, dbnodes) => {
+export const changeMasterNode = async (downNodeId) => {
+    const { dbnodes } = await initPools();
+
     let chosenNodeNumber = null;
     let newMasterNode = null;
     let nodeRole = null;
@@ -68,9 +70,15 @@ export const changeMasterNode = async (downNodeId, dbnodes) => {
         throw new Error("No available nodes to promote!");
     }
 
-    // Pick a random candidate from the valid list
-    const randomIndex = Math.floor(Math.random() * candidates.length);
-    newMasterNode = candidates[randomIndex];
+    // Pick a random candidate from the valid list or if node 2 is down, pick node 1 (2006 user id, just change)
+    if (downNodeId === "2") {
+        newMasterNode =
+            candidates.find((n) => n.node === "1") || candidates[0];
+    } else {
+        // otherwise, keep previous random behavior
+        const randomIndex = Math.floor(Math.random() * candidates.length);
+        newMasterNode = candidates[randomIndex];
+    }
     chosenNodeNumber = newMasterNode.node;
 
     console.log(`Elected Node ${chosenNodeNumber} as the new Master.`);
@@ -112,7 +120,8 @@ export const changeMasterNode = async (downNodeId, dbnodes) => {
 
 export const recoverOldMaster = async (crashedNodeId) => {
 
-    const crashedNode = dbnodes.find(n => n.node === crashedNodeId);
+    const { dbnodes } = await initPools();
+    const crashedNode = dbnodes.find(n => n.node === crashedNodeId);    
     const currentMaster = dbnodes.find(n => n.role === 'MASTER' && n.status === 'UP');
 
     if (!crashedNode) throw new Error("Node not found.");
