@@ -148,12 +148,16 @@ export const createUser = async (data) => {
 export const getAllUsers = async () => {
   const slave06 = await getReadPool("SLAVE 06");
   const slave07 = await getReadPool("SLAVE 07");
-  const [rows06, rows07] = await Promise.all([
+  const [result06, result07] = await Promise.all([
     slave06.query("SELECT * FROM Users"),
     slave07.query("SELECT * FROM Users"),
   ]);
 
-  return [...rows06, ...rows07] || null;
+  // Extract actual rows from query results (first element of array)
+  const rows06 = result06[0] || [];
+  const rows07 = result07[0] || [];
+
+  return [...rows06, ...rows07];
 };
 
 export const getUserById = async (id) => {
@@ -162,13 +166,14 @@ export const getUserById = async (id) => {
     const slave06 = await getReadPool("SLAVE 06");
     const slave07 = await getReadPool("SLAVE 07");
 
-    const [rows06, rows07] = await Promise.all([
+    const [result06, result07] = await Promise.all([
       slave06.query("SELECT * FROM Users WHERE id = ?", [id]),
       slave07.query("SELECT * FROM Users WHERE id = ?", [id]),
     ]);
 
-    const users06 = rows06[0];
-    const users07 = rows07[0];
+    // Extract actual rows from query results
+    const users06 = result06[0];
+    const users07 = result07[0];
     const user = (users06 && users06[0]) || (users07 && users07[0]);
 
     if (user) {
