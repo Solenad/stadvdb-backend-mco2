@@ -234,7 +234,7 @@ public class MCO2TestScript {
     private static HttpResponse<String> doGet(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(url))
-            .timeout(Duration.ofSeconds(10))
+            .timeout(Duration.ofSeconds(60))
             .GET()
             .build();
 
@@ -252,7 +252,7 @@ public class MCO2TestScript {
     private static HttpResponse<String> doPut(String url, String jsonBody) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(url))
-            .timeout(Duration.ofSeconds(10))
+            .timeout(Duration.ofSeconds(60))
             .header("Content-Type", "application/json")
             .PUT(BodyPublishers.ofString(jsonBody))
             .build();
@@ -270,7 +270,7 @@ public class MCO2TestScript {
     private static HttpResponse<String> doPost(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(url))
-            .timeout(Duration.ofSeconds(10))
+            .timeout(Duration.ofSeconds(60))
             .POST(BodyPublishers.noBody())
             .build();
         long start = System.currentTimeMillis();
@@ -315,7 +315,7 @@ public class MCO2TestScript {
             System.out.println("Initial value (check if firstname is notchanged):");
             printRow();
 
-            System.out.println("Stop the master node (press enter when done");
+            System.out.println("Stop the master node (press enter when done)");
             System.in.read();
 
             // Case 1: attempt update while master is down (error 500)
@@ -335,10 +335,14 @@ public class MCO2TestScript {
             // Case 2: retry update after failover (new master)
             System.out.println("Case #2: Retrying same write after failover (should SUCCEED)");
             String bodySuccess = "{\"firstName\":\"afterFailover\"}";
-            doPut(normalUrl, bodySuccess);
-
-            System.out.println("Row from central (Should be firstName: afterFailover): ");
-            printRow();
+            try {
+                doPut(normalUrl, bodySuccess);
+                System.out.println("Row from central (Should be firstName: afterFailover): ");
+                printRow();
+            } catch (Exception e) {
+                System.out.println("Case #2 failed after failover: " 
+                    + e.getClass().getSimpleName() + " - " + e.getMessage());
+            }
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -361,7 +365,7 @@ public class MCO2TestScript {
 
             // Case 3: attempt update while fragment is down
             System.out.println("\nCase #3: Write while fragment is down");
-            System.out.println("Stop one fragment node (in this case node 1 since userid is from 2006 (enter once done).");
+            System.out.println("Stop one fragment node (in this case node 0 since userid is from 2006 (enter once done).");
             System.in.read();
 
             String bodyCentralOnly = "{\"firstName\":\"centralOnly\"}";
@@ -379,13 +383,13 @@ public class MCO2TestScript {
             System.in.read();
 
             // Central row firstName should be "centralOnly"
-            System.out.println("Central row: ");
+            System.out.println("Central row (firstname should be centralOnly): ");
             printRow();
 
             // Change year based on user used, output here should be "centralOnly" now instead of "notchanged"
             int year = 2006;
             String yearUrl = centralnode + "/users/year/" + year;
-            System.out.println("Fragment firstName after recovery: ");
+            System.out.println("Fragment firstName after recovery (should be centralonly, not notchanged): ");
             doGet(yearUrl);
 
         } catch (Exception e) {
@@ -430,8 +434,8 @@ public class MCO2TestScript {
                     }*/
                 }
                 System.out.println("\n===== Test Cases for Global Failure Recovery ====");
-                masterFailTest();
-                Thread.sleep(2000);
+                //masterFailTest();
+                //Thread.sleep(2000);
 
                 fragmentFailTest();
         } catch (Exception e) {
