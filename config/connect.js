@@ -133,4 +133,26 @@ setInterval(async () => {
     } catch (err) {console.log(`Node ${deadNode.node} is still unreachable.`);
     }
   }
-}, 10000);
+}, 2000);
+
+export const getNode1 = () => {
+  if (!dbnodes) {
+    throw new Error("DB nodes not initialized. Call initPools() first.");
+  }
+  const node = dbnodes.find((n) => n.node === "1");
+  if (!node) {
+    throw new Error("Node 1 not found in dbnodes.");
+  }
+  return node.pool;
+};
+
+export const getNode3 = () => {
+  if (!dbnodes) {
+    throw new Error("DB nodes not initialized. Call initPools() first.");
+  }
+  const node = dbnodes.find((n) => n.node === "3");
+  if (!node) {
+    throw new Error("Node 3 not found in dbnodes.");
+  }
+  return node.pool;
+};
