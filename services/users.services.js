@@ -92,9 +92,10 @@ export const createUser = async (data) => {
   /*const { slave06 } = await getReadPool("SLAVE 06");
   const { slave07 } = await getReadPool("SLAVE 07");*/
   let connPrimary = null;
-  //let connFragment = null;
+  let connFragment = null;
 
   try {
+    console.log('[DB][CREATE] Starting createUser transaction', { summary: { firstName: data.firstName, lastName: data.lastName, dateOfBirth: data.dateOfBirth } });
     if (!data.dateOfBirth) {
       throw new Error("dateOfBirth is required (must be 2006 or 2007).");
     }
@@ -111,26 +112,47 @@ export const createUser = async (data) => {
 
     connPrimary = await masterNode.getConnection();
     await connPrimary.beginTransaction();
+    console.log('[DB][CREATE] Began transaction on master');
 
     const [result] = await connPrimary.execute(insertSQL, values);
+    console.log('[DB][CREATE] Insert executed on master, result:', result);
     const insertedId = result.insertId;
 
-    /*connFragment =
-      year === 2006 ? await node1.getConnection() : await node3.getConnection();
-
-    await connFragment.beginTransaction();
-
-    await connFragment.execute(insertSQL, values);
-
-    await connFragment.commit();*/
     await connPrimary.commit();
+    console.log('[DB][CREATE] Commit successful on master, insertedId:', insertedId);
+
+    // write to fragment node for horizontal sync during transactions
+    try {
+      const fragmentPool = year === 2006 ? getNode1() : getNode3();
+      if (fragmentPool) {
+        connFragment = await fragmentPool.getConnection();
+        await connFragment.beginTransaction();
+        console.log('[DB][CREATE] Began transaction on fragment for year:', year);
+        await connFragment.execute(insertSQL, values);
+        await connFragment.commit();
+        console.log('[DB][CREATE] Fragment insert committed for year:', year, 'insertedId:', insertedId);
+      } else {
+        console.warn('[DB][CREATE] No fragment pool found for year:', year);
+      }
+    } catch (fragErr) {
+      console.error('[DB][CREATE] Fragment insert failed (will rely on recovery service):', fragErr);
+      if (connFragment) {
+        try {
+          await connFragment.rollback();
+          console.log('[DB][CREATE] Rolled back fragment transaction for year:', year);
+        } catch (rbErr) {}
+      }
+    } finally {
+      if (connFragment) connFragment.release();
+    }
 
     return { success: true, id: insertedId };
   } catch (err) {
-    console.error("Insert failed. Rolling back...", err);
+    console.error("[DB][CREATE] Insert failed. Rolling back...", err);
     if (connPrimary) {
       try {
         await connPrimary.rollback();
+        console.log('[DB][CREATE] Rolled back transaction on master');
       } catch {}
     }
     /*if (connFragment) {
@@ -157,6 +179,8 @@ export const getAllUsers = async () => {
   const rows06 = result06[0] || [];
   const rows07 = result07[0] || [];
 
+  console.log(`[DB][READ] getAllUsers fetched ${rows06.length} rows from SLAVE 06 and ${rows07.length} rows from SLAVE 07`);
+
   return [...rows06, ...rows07];
 };
 
@@ -177,10 +201,11 @@ export const getUserById = async (id) => {
     const user = (users06 && users06[0]) || (users07 && users07[0]);
 
     if (user) {
+      console.log('[DB][READ] getUserById found user in slave for id:', id);
       return user;
     }
   } catch (err) {
-    console.error("Read from slaves failed, will try master:", err.message);
+    console.error("[DB][READ] Read from slaves failed, will try master:", err.message);
   }
 
   // read from central if nothing works from slave nodes
@@ -189,6 +214,7 @@ export const getUserById = async (id) => {
     "SELECT * FROM Users WHERE id = ?",
     [id],
   );
+  console.log('[DB][READ] getUserById read from master for id:', id, 'rowsFound:', rows.length);
   return rows[0] || null;
 };
 
@@ -198,9 +224,11 @@ export const getAllUsersByDate = async (year) => {
 
   if (year === 2006) {
     const [rows] = await slave06.query("SELECT * FROM Users");
+    console.log('[DB][READ] getAllUsersByDate fetched', rows.length, 'rows for 2006 from SLAVE 06');
     return rows;
   } else if (year === 2007) {
     const [rows] = await slave07.query("SELECT * FROM Users");
+    console.log('[DB][READ] getAllUsersByDate fetched', rows.length, 'rows for 2007 from SLAVE 07');
     return rows;
   } else {
     return null;
@@ -217,6 +245,7 @@ export const updateUserById = async (
   let connFragment = null;
 
   try {
+    console.log('[DB][UPDATE] Starting updateUserById', { id, data, isolation, syncReplicate });
     connPrimary = await masterNode.getConnection();
 
     if (isolation) {
@@ -225,20 +254,28 @@ export const updateUserById = async (
       );
     }
     await connPrimary.beginTransaction();
+    console.log('[DB][UPDATE] Began transaction on master for id:', id);
 
+    // Try to parse date - handle both YYYY-MM-DD and MM/DD/YYYY formats
     const [[user]] = await connPrimary.execute(
-      `SELECT id, YEAR(STR_TO_DATE(dateOfBirth, '%m/%d/%Y')) AS year
+      `SELECT id, 
+       COALESCE(
+         YEAR(STR_TO_DATE(dateOfBirth, '%Y-%m-%d')),
+         YEAR(STR_TO_DATE(dateOfBirth, '%m/%d/%Y'))
+       ) AS year
       FROM Users WHERE id = ? FOR UPDATE`,
       [id],
     );
 
     if (!user) {
       await connPrimary.rollback();
+      console.warn('[DB][UPDATE] No user found for id (after SELECT FOR UPDATE):', id);
       return null;
     }
 
     if (user.year !== 2006 && user.year !== 2007) {
       await connPrimary.rollback();
+      console.error('[DB][UPDATE] User year not supported for update:', user.year);
       throw new Error("Only users with DOB 2006 or 2007 can be updated.");
     }
 
@@ -283,6 +320,7 @@ export const updateUserById = async (
 
     if (setParts.length === 0) {
       await connPrimary.rollback();
+      console.warn('[DB][UPDATE] No valid columns provided for update on id:', id);
       throw new Error("No valid columns provided.");
     }
 
@@ -293,7 +331,9 @@ export const updateUserById = async (
     const isSamePool = fragmentPool === masterNode;
 
     await connPrimary.execute(updateSQL, values);
+    console.log('[DB][UPDATE] Update executed on master for id:', id, 'sql:', updateSQL);
     await connPrimary.commit();
+    console.log('[DB][UPDATE] Commit successful on master for id:', id);
 
     if (!isSamePool) {
       try {
@@ -307,6 +347,7 @@ export const updateUserById = async (
         await connFragment.beginTransaction();
         await connFragment.execute(updateSQL, values);
         await connFragment.commit();
+        console.log('[DB][UPDATE] Fragment update committed for id:', id);
       } catch (fragErr) {
         console.error(
           "Fragment update failed (will rely on recovery service):",
@@ -315,20 +356,24 @@ export const updateUserById = async (
         if (connFragment) {
           try {
             await connFragment.rollback();
+            console.log('[DB][UPDATE] Rolled back fragment update for id:', id);
           } catch {}
         }
       }
     } 
     return { success: true };
   } catch (err) {
+    console.error('[DB][UPDATE] Error during updateUserById for id:', id, err);
     if (connPrimary) {
       try {
         await connPrimary.rollback();
+        console.log('[DB][UPDATE] Rolled back master transaction for id:', id);
       } catch {}
     }
     if (connFragment) {
       try {
         await connFragment.rollback();
+        console.log('[DB][UPDATE] Rolled back fragment transaction for id:', id);
       } catch {}
     }
     throw err;
@@ -344,9 +389,11 @@ export const deleteUserById = async (id) => {
   //let connFragment = null;
 
   try {
+    console.log('[DB][DELETE] Starting deleteUserById for id:', id);
     connPrimary = await masterNode.getConnection();
 
     await connPrimary.beginTransaction();
+    console.log('[DB][DELETE] Began transaction on master for delete id:', id);
 
     const [[user]] = await connPrimary.execute(
       `SELECT id, YEAR(dateOfBirth) AS year FROM Users WHERE id = ? FOR UPDATE`,
@@ -355,11 +402,13 @@ export const deleteUserById = async (id) => {
 
     if (!user) {
       await connPrimary.rollback();
+      console.warn('[DB][DELETE] No user found for delete id:', id);
       return null;
     }
 
     if (user.year !== 2006 && user.year !== 2007) {
       await connPrimary.rollback();
+      console.error('[DB][DELETE] User year not allowed for delete:', user.year);
       throw new Error("Only users with DOB 2006 or 2007 can be deleted.");
     }
 
@@ -383,13 +432,15 @@ export const deleteUserById = async (id) => {
 
     //await connFragment.commit();
     await connPrimary.commit();
+    console.log('[DB][DELETE] Commit successful on master for delete id:', id);
 
     return { success: true };
   } catch (err) {
-    console.error("Delete failed. Rolling back...", err);
+    console.error("[DB][DELETE] Delete failed. Rolling back...", err);
     if (connPrimary) {
       try {
         await connPrimary.rollback();
+        console.log('[DB][DELETE] Rolled back delete transaction on master for id:', id);
       } catch {}
     }
     /*if (connFragment) {
@@ -402,4 +453,4 @@ export const deleteUserById = async (id) => {
     if (connPrimary) connPrimary.release();
     //if (connFragment) connFragment.release();
   }
-}; 
+};
